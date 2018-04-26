@@ -7,6 +7,7 @@ from environment import ReplayMemory
 import torch
 from torch.autograd import Variable
 
+torch.backends.cudnn.benchmark = False
 dtype = torch.cuda.FloatTensor
 
 class Agent(object):
@@ -76,10 +77,10 @@ class Agent(object):
             if self.step % self._update_freq == self._update_freq - 1:
                 self.target_q.load_state_dict(self.q.state_dict())
                 if self.step % (self._update_freq * 10) == (self._update_freq * 10) -1:
-                    torch.save(self.target_q, 'models/model_{}'.format(self.step))
+                    torch.save(self.target_q, 'models1/model_{}'.format(self.step))
                 #print 'update'
        
-    def play(self, model_path, num_ep=100):
+    def play(self, model_path, num_ep=200):
         self.q = torch.load(model_path)
         best_reward = 0
         best_screen_hist = []
@@ -99,36 +100,62 @@ class Agent(object):
                 act_hist.append(action)
                 if cnt > 200: # avoid local maxima ??? same actions....??
                     import numpy as np
-                    if np.array(act_hist[-100:]).mean() == act_hist[-1]:
+		    ################################################
+		    ##
+		    if cnt>999:
+			print 'count>1k : {}'.format(cnt)
+                    ################################################
+		    if np.array(act_hist[-100:]).mean() == act_hist[-1]:
                         action = random.randrange(self.env.action_size)
+			#############################################
+			## if cnt>1k print booyah
+			#if cnt>999:
+			#	print 'count: {}'.format(cnt)
+			#############################################
                 screen, reward, terminal = self.env.act(action, is_train=False)
                 self.hist.add(screen)
                 current_reward += reward
                 #print cnt, action, current_reward, terminal, self.env.lives
                 current_screen_hist.append(self.env.screen)
             print current_reward
+	    print 'count: {}'.format(cnt)
             if current_reward > best_reward:
                 best_reward = current_reward
                 best_screen_hist = current_screen_hist
         import imageio
         print 'best reward: {}'.format(best_reward)
-        imageio.mimsave('/data/best_{}.gif'.format(best_reward), best_screen_hist, 'GIF', duration=0.0001)
+        imageio.mimsave('movies_play/best_{}.gif'.format(best_reward), best_screen_hist, 'GIF', duration=0.0001)
 
     def _q_learning(self):
         sc_t, actions, rewards, sc_t_1, terminals = self.mem.sample()
         batch_obs_t = self._to_tensor(sc_t)
+	#print 'shape_batch_obs_t: {}'.format(batch_obs_t.shape)
         batch_obs_t_1 = self._to_tensor(sc_t_1, volatile=True)
+	#print 'shape_batch_obs_t_1: {}'.format(batch_obs_t_1.shape)
         batch_rewards = self._to_tensor(rewards).unsqueeze(1)
+	#print 'shape_batch_rewards: {}'.format(batch_rewards.shape)
         batch_actions = self._to_tensor(actions, data_type=torch.cuda.LongTensor).unsqueeze(1)
+	#print 'shape_batch_actions: {}'.format(batch_actions.shape)
         batch_terminals = self._to_tensor(1.-terminals).unsqueeze(1)
+	#print 'batch_terminals: {}'.format(batch_terminals.shape)
+	
+	q_dash = self.q(batch_obs_t)
+	#print 'shape_q: {}'.format(q_dash.shape)
 
         q_values = self.q(batch_obs_t).gather(1, batch_actions)
-        next_max_q_values = self.target_q(batch_obs_t_1).max(1)[0]
+        next_max_q_values = self.target_q(batch_obs_t_1).max(1)[0].unsqueeze(1)
+	#print 'next_max_q: {}'.format(next_max_q_values.shape)
         next_q_values = batch_terminals * next_max_q_values
+	#print 'next_q: {}'.format(next_q_values.shape)
         target_q_values = batch_rewards + (0.99*next_q_values)
         target_q_values.volatile = False
 
         cri = torch.nn.SmoothL1Loss()
+	######################################################
+	##
+	#print(q_values)
+	#print(target_q_values)
+	######################################################
         self.loss = cri(q_values, target_q_values)
         self.optim.zero_grad()
         self.loss.backward()
@@ -147,8 +174,10 @@ class Agent(object):
             action = random.randrange(self.env.action_size)
         else:
             inputs = self._to_tensor(self.hist.get)
+            #print 'inputs : {}'.format(inputs.shape)
             pred = self.q(inputs.unsqueeze(0))
-            action = pred.data.max(1)[1][0][0]
+	    #print 'pred : {}'.format(pred.shape)
+            action = pred.data.max(1)[1][0] # ##### actual = pred.data.max(1)[1][0][0]
         return action
 
     def _to_tensor(self, ndarray, volatile=False, data_type=dtype):
